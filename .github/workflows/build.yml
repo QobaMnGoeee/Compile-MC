@@ -37,6 +37,24 @@ jobs:
       - name: Clone repository
         uses: actions/checkout@v5
 
+      # Жоба түбірін (settings.gradle + gradlew + app/ бар қапшық) автоматты түрде табады.
+      # Репозиторий түбірінде де, ішкі қапшықта да (мысалы termux-app-0.118.3/) жұмыс істейді.
+      - name: Locate project root
+        run: |
+          set -eo pipefail
+          SETTINGS="$(find . -maxdepth 3 -name settings.gradle -not -path './.git/*' | sort | head -n 1)"
+          if [ -z "$SETTINGS" ]; then
+            echo "::error title=Жоба табылмады::settings.gradle табылмады. Репозиторийдегі файлдар тізімі төменде:"
+            find . -maxdepth 3 -not -path './.git/*' | sort | head -n 80
+            exit 1
+          fi
+          DIR="$(cd "$(dirname "$SETTINGS")" && pwd)"
+          for f in gradlew app/build.gradle app/src/main/cpp; do
+            [ -e "$DIR/$f" ] || { echo "::error::$DIR ішінде '$f' жоқ"; find "$DIR" -maxdepth 2 | sort | head -n 60; exit 1; }
+          done
+          echo "Жоба түбірі: $DIR"
+          echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+
       # sdkmanager жаңа Java (17+) талап етеді, сондықтан бұл қадам JDK 11 орнатылмай тұрып,
       # runner-дің әдепкі Java-сымен орындалады.
       - name: Install Android SDK components
@@ -67,9 +85,9 @@ jobs:
       - name: Prepare bootstrap archives
         env:
           GH_TOKEN: ${{ github.token }}
+        working-directory: ${{ env.PROJECT_DIR }}/app/src/main/cpp
         run: |
           set -uo pipefail
-          cd app/src/main/cpp
           ARCHS="aarch64 arm i686 x86_64"
 
           missing() {
@@ -88,7 +106,7 @@ jobs:
           fi
 
           if [ -n "$(missing)" ]; then
-            echo "::error title=Bootstrap архивтері жоқ::Табылмады:$(missing). Оларды termux-packages арқылы 'kz.bbsshell.app' префиксімен жинап, '$BOOTSTRAP_TAG' тегімен Release-ке жүктеңіз немесе 'git add -f' арқылы app/src/main/cpp/ ішіне қосыңыз (README.md қараңыз)."
+            echo "::error title=Bootstrap архивтері жоқ::Табылмады:$(missing). Оларды termux-packages арқылы 'kz.bbsshell.app' префиксімен жинап, '$BOOTSTRAP_TAG' тегімен Release-ке жүктеңіз немесе 'git add -f' арқылы жобаның app/src/main/cpp/ қапшығына қосыңыз (README.md қараңыз)."
             exit 1
           fi
 
@@ -101,6 +119,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v5
 
       - name: Build debug APKs
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           set -euo pipefail
           chmod +x ./gradlew
@@ -114,7 +133,7 @@ jobs:
           ./gradlew --no-daemon --stacktrace assembleDebug
 
       - name: Validate APKs and create checksums
-        working-directory: app/build/outputs/apk/debug
+        working-directory: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug
         run: |
           set -euo pipefail
           ls -l
@@ -129,7 +148,7 @@ jobs:
         with:
           name: bbsshell-debug-apks
           path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/debug/sha256sums
-            app/build/outputs/apk/debug/output-metadata.json
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/sha256sums
+            ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/output-metadata.json
           if-no-files-found: error
